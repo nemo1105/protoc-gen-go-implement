@@ -1,6 +1,6 @@
 # protoc-gen-go-implement
 
-[中文文档](README_ZH.md)
+[中文文档](README_zh.md)
 
 `protoc-gen-go-implement` is a Go `protoc` plugin that generates empty gRPC service implementations returning `Unimplemented`. It supports single-file and multi-file layouts. Use `package_suffix` to emit implementations in a separate package (dot-importing the proto package), and it works with `paths=source_relative`.
 
