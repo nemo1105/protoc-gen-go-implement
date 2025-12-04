@@ -1,5 +1,6 @@
 .idea
 .DS_Store
 protoc-gen-go-implement
+debug.bin
 
 /example/gen/

@@ -3,11 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	"path"
 	"strings"
 	"unicode"
 
 	"google.golang.org/protobuf/compiler/protogen"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/pluginpb"
 )
 
 const (
@@ -36,43 +39,68 @@ type config struct {
 	implSuffix     string
 	packageSuffix  string
 	connectSuffix  string
+	modulePath     string
 }
 
+var (
+	flagSet       flag.FlagSet
+	layoutFlag    = flagSet.String("layout", string(layoutSingle), "layout: single or multi")
+	targetFlag    = flagSet.String("target", string(targetGRPC), "target runtime: grpc or connect")
+	singleFile    = flagSet.String("single_suffix", defaultSingleSuffix, "suffix for single-file layout")
+	services      = flagSet.String("services_suffix", defaultServicesFile, "suffix for service definition file in multi layout")
+	rpcSuffix     = flagSet.String("rpc_suffix", defaultRPCFileSuffix, "suffix for RPC files in multi layout")
+	implSuffix    = flagSet.String("impl_suffix", "Impl", "suffix appended to generated service struct names")
+	pkgSuffix     = flagSet.String("package_suffix", "", "suffix appended to go_package for generated impl package (empty = same package)")
+	connectSuffix = flagSet.String("connect_package_suffix", "connect", "suffix for connect generated package (used when target=connect)")
+	splitFlag     = flagSet.Bool("split", false, "generate svc and rpc to separate files")
+	diffPackage   = flagSet.Bool("diff_package", false, "generate files are diff with base protocol files")
+)
+
 func main() {
-	var flagSet flag.FlagSet
-	layoutFlag := flagSet.String("layout", string(layoutSingle), "layout: single or multi")
-	targetFlag := flagSet.String("target", string(targetGRPC), "target runtime: grpc or connect")
-	singleFile := flagSet.String("single_suffix", defaultSingleSuffix, "suffix for single-file layout")
-	services := flagSet.String("services_suffix", defaultServicesFile, "suffix for service definition file in multi layout")
-	rpcSuffix := flagSet.String("rpc_suffix", defaultRPCFileSuffix, "suffix for RPC files in multi layout")
-	implSuffix := flagSet.String("impl_suffix", "Impl", "suffix appended to generated service struct names")
-	pkgSuffix := flagSet.String("package_suffix", "", "suffix appended to go_package for generated impl package (empty = same package)")
-	connectSuffix := flagSet.String("connect_package_suffix", "connect", "suffix for connect generated package (used when target=connect)")
-	splitFlag := flagSet.Bool("split", false, "generate svc and rpc to separate files")
+	if data, err := os.ReadFile("debug.bin"); err == nil {
+		req := &pluginpb.CodeGeneratorRequest{}
+		if err := proto.Unmarshal(data, req); err != nil {
+			panic(err)
+		}
+		// 用 protogen.Options 解析 CodeGeneratorRequest
+		plugin, err := protogen.Options{ParamFunc: flagSet.Set}.New(req)
+		if err != nil {
+			panic(err)
+		}
+
+		err = debugRun(plugin)
+		if err != nil {
+			panic(err)
+		}
+		return
+	}
 
 	protogen.Options{
 		ParamFunc: flagSet.Set,
 	}.Run(func(plugin *protogen.Plugin) error {
-		cfg, err := buildConfig(*layoutFlag, *targetFlag, *singleFile, *services, *rpcSuffix, *implSuffix, *pkgSuffix, *connectSuffix, *splitFlag)
-		if err != nil {
-			return err
-		}
-
-		for _, file := range plugin.Files {
-			if !file.Generate || len(file.Services) == 0 {
-				continue
-			}
-
-			switch cfg.layout {
-			case layoutSingle:
-				generateSingleFile(plugin, file, cfg)
-			case layoutMulti:
-				generateMultiFiles(plugin, file, cfg)
-			}
-		}
-
-		return nil
+		return debugRun(plugin)
 	})
+}
+func debugRun(plugin *protogen.Plugin) error {
+	cfg, err := buildConfig(*layoutFlag, *targetFlag, *singleFile, *services, *rpcSuffix, *implSuffix, *pkgSuffix, *connectSuffix, *splitFlag)
+	if err != nil {
+		return err
+	}
+
+	for _, file := range plugin.Files {
+		if !file.Generate || len(file.Services) == 0 {
+			continue
+		}
+
+		switch cfg.layout {
+		case layoutSingle:
+			generateSingleFile(plugin, file, cfg)
+		case layoutMulti:
+			generateMultiFiles(plugin, file, cfg)
+		}
+	}
+
+	return nil
 }
 
 func buildConfig(layout, target, single, services, rpcSuffix, impl, pkgSuffix, connectSuffix string, split bool) (*config, error) {
@@ -134,8 +162,6 @@ func generateMultiFiles(plugin *protogen.Plugin, file *protogen.File, cfg *confi
 
 	servicesFile := target.prefix + cfg.servicesSuffix
 	sg := plugin.NewGeneratedFile(servicesFile, target.importPath)
-	writeHeader(sg, file)
-	sg.P()
 	writePackage(sg, target.pkgName)
 	sg.P()
 	// Service file imports: gRPC needs proto + status; Connect only needs connect pkg alias for handler assertion.
@@ -185,7 +211,7 @@ func writeImports(g *protogen.GeneratedFile, file *protogen.File, target targetK
 
 	g.P("import (")
 	if needProto && !samePackage {
-		g.P(fmt.Sprintf("%s %q", pkg.protoAlias, string(file.GoImportPath)))
+		g.P(fmt.Sprintf(". %q", string(file.GoImportPath)))
 	}
 	if needContext {
 		g.P(`context "context"`)
@@ -280,11 +306,11 @@ func targetInfo(file *protogen.File, cfg *config) targetPackage {
 		prefix:             prefix,
 		importPath:         importPath,
 		pkgName:            pkgName,
-		samePackage:        importPath == file.GoImportPath,
+		samePackage:        importPath == file.GoImportPath && !*diffPackage,
 		protoAlias:         protoAlias,
 		connectImportPath:  connectImport,
 		connectPkgName:     connectPkg,
-		connectSamePackage: importPath == connectImport,
+		connectSamePackage: importPath == connectImport && !*diffPackage,
 		connectAlias:       connectAlias,
 	}
 }
@@ -352,10 +378,7 @@ func renderMethodConnect(g *protogen.GeneratedFile, service *protogen.Service, m
 }
 
 func qualifyProto(name string, pkg targetPackage) string {
-	if pkg.samePackage {
-		return name
-	}
-	return pkg.protoAlias + "." + name
+	return name
 }
 
 func snakeCase(s string) string {
