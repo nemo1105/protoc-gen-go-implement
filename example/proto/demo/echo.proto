@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package demo;
+
+option go_package = "example/gen/demo";
+
+import "entity/entity.proto";
+
+service Greeter {
+  rpc SayHello(HelloRequest) returns (HelloReply);
+  rpc StreamHellos(HelloRequest) returns (stream HelloReply);
+  rpc Chat(stream HelloRequest) returns (stream HelloReply);
+  rpc Upload(stream Chunk) returns (UploadAck);
+}
+
+message HelloRequest {
+  string name = 1;
+  entity.TestEntity entity = 2;
+}
+
+message HelloReply {
+  string message = 1;
+}
+
+message Chunk {
+  bytes data = 1;
+}
+
+message UploadAck {
+  bool ok = 1;
+}

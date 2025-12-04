@@ -1,0 +1,5 @@
+.idea
+.DS_Store
+protoc-gen-go-implement
+
+/example/gen/

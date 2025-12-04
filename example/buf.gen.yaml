@@ -1,0 +1,53 @@
+version: v2
+managed:
+  enabled: true
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: gen
+    opt:
+      - paths=source_relative
+  - remote: buf.build/grpc/go
+    out: gen
+    opt:
+      - paths=source_relative
+  # multi files
+  - local: protoc-gen-go-implement
+    out: gen
+    opt:
+      - paths=source_relative
+      - package_suffix=multi
+      - services_suffix=.svc.go
+      - rpc_suffix=.rpc.go
+      - impl_suffix=ServiceImplement
+      - split=true
+  # single file
+  - local: protoc-gen-go-implement
+    out: gen
+    opt:
+      - paths=source_relative
+      - single_suffix=.impl_all_in_noe.go
+
+# after `buf generate`
+# .
+#├── buf.gen.yaml
+#├── buf.yaml
+#├── gen
+#│   ├── demo
+#│   │   ├── echo.impl_all_in_noe.go                # single file example
+#│   │   ├── echo.pb.go                             # buf.build/protocolbuffers/go
+#│   │   ├── echo_grpc.pb.go                        # buf.build/grpc/go
+#│   │   └── multi                                  # multi files example (by split=true)
+#│   │       ├── echo.svc.go
+#│   │       ├── echo_greeter_chat.rpc.go
+#│   │       ├── echo_greeter_say_hello.rpc.go
+#│   │       ├── echo_greeter_stream_hellos.rpc.go
+#│   │       └── echo_greeter_upload.rpc.go
+#│   └── entity
+#│       └── entity.pb.go
+#├── go.mod
+#├── go.sum
+#└── proto
+#    ├── demo
+#    │   └── echo.proto
+#    └── entity
+#        └── entity.proto
