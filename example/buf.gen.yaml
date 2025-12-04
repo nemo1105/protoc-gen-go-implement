@@ -10,7 +10,8 @@ plugins:
     out: gen
     opt:
       - paths=source_relative
-  # multi files
+
+  # multi files grpc
   - local: protoc-gen-go-implement
     out: gen
     opt:
@@ -20,30 +21,67 @@ plugins:
       - rpc_suffix=.rpc.go
       - impl_suffix=ServiceImplement
       - split=true
+      - target=grpc
+  # single file grpc
+  - local: protoc-gen-go-implement
+    out: gen
+    opt:
+      - paths=source_relative
+      - single_suffix=.impl_all_in_one.go
+      - target=grpc
+
+  - remote: buf.build/connectrpc/go
+    out: gen
+    opt:
+      - paths=source_relative
+  # multi files connect
+  - local: protoc-gen-go-implement
+    out: gen
+    opt:
+      - paths=source_relative
+      - package_suffix=multi_connect
+      - services_suffix=.svc.go
+      - rpc_suffix=.rpc.go
+      - impl_suffix=ServiceImplement
+      - split=true
+      - target=connect
   # single file
   - local: protoc-gen-go-implement
     out: gen
     opt:
       - paths=source_relative
-      - single_suffix=.impl_all_in_noe.go
+      - package_suffix=single_connect
+      - single_suffix=.impl_all_in_one_connect.go
+      - target=connect
 
-# after `buf generate`
-# .
+
+### after `buf generate`
+#.
 #├── buf.gen.yaml
 #├── buf.yaml
 #├── gen
 #│   ├── demo
-#│   │   ├── echo.impl_all_in_noe.go                # single file example
-#│   │   ├── echo.pb.go                             # buf.build/protocolbuffers/go
-#│   │   ├── echo_grpc.pb.go                        # buf.build/grpc/go
-#│   │   └── multi                                  # multi files example (by split=true)
-#│   │       ├── echo.svc.go
-#│   │       ├── echo_greeter_chat.rpc.go
-#│   │       ├── echo_greeter_say_hello.rpc.go
-#│   │       ├── echo_greeter_stream_hellos.rpc.go
-#│   │       └── echo_greeter_upload.rpc.go
+#│   │   ├── democonnect                              # buf.build/connectrpc/go
+#│   │   │   └── echo.connect.go
+#│   │   ├── echo.impl_all_in_one.go                  # single file example
+#│   │   ├── echo.pb.go                               # buf.build/protocolbuffers/go
+#│   │   ├── echo_grpc.pb.go                          # buf.build/grpc/go
+#│   │   ├── multi                                    # multi files example (by split=true)
+#│   │   │   ├── echo.svc.go
+#│   │   │   ├── echo_greeter_chat.rpc.go
+#│   │   │   ├── echo_greeter_say_hello.rpc.go
+#│   │   │   ├── echo_greeter_stream_hellos.rpc.go
+#│   │   │   └── echo_greeter_upload.rpc.go
+#│   │   ├── multi_connect                            # multi files example (by split=true target=connect)
+#│   │   │   ├── echo.svc.go
+#│   │   │   ├── echo_greeter_chat.rpc.go
+#│   │   │   ├── echo_greeter_say_hello.rpc.go
+#│   │   │   ├── echo_greeter_stream_hellos.rpc.go
+#│   │   │   └── echo_greeter_upload.rpc.go
+#│   │   └── single_connect
+#│   │       └── echo.impl_all_in_one_connect.go    # single file example (target=connect)
 #│   └── entity
-#│       └── entity.pb.go
+#│       └── entity.pb.go                           # buf.build/protocolbuffers/go
 #├── go.mod
 #├── go.sum
 #└── proto

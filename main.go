@@ -17,34 +17,43 @@ const (
 )
 
 type layoutMode string
+type targetKind string
 
 const (
 	layoutSingle layoutMode = "single"
 	layoutMulti  layoutMode = "multi"
+
+	targetGRPC    targetKind = "grpc"
+	targetConnect targetKind = "connect"
 )
 
 type config struct {
 	layout         layoutMode
+	target         targetKind
 	singleSuffix   string
 	servicesSuffix string
 	rpcSuffix      string
 	implSuffix     string
 	packageSuffix  string
+	connectSuffix  string
 }
 
 func main() {
 	var flagSet flag.FlagSet
+	layoutFlag := flagSet.String("layout", string(layoutSingle), "layout: single or multi")
+	targetFlag := flagSet.String("target", string(targetGRPC), "target runtime: grpc or connect")
 	singleFile := flagSet.String("single_suffix", defaultSingleSuffix, "suffix for single-file layout")
 	services := flagSet.String("services_suffix", defaultServicesFile, "suffix for service definition file in multi layout")
 	rpcSuffix := flagSet.String("rpc_suffix", defaultRPCFileSuffix, "suffix for RPC files in multi layout")
 	implSuffix := flagSet.String("impl_suffix", "Impl", "suffix appended to generated service struct names")
 	pkgSuffix := flagSet.String("package_suffix", "", "suffix appended to go_package for generated impl package (empty = same package)")
+	connectSuffix := flagSet.String("connect_package_suffix", "connect", "suffix for connect generated package (used when target=connect)")
 	splitFlag := flagSet.Bool("split", false, "generate svc and rpc to separate files")
 
 	protogen.Options{
 		ParamFunc: flagSet.Set,
 	}.Run(func(plugin *protogen.Plugin) error {
-		cfg, err := buildConfig(*singleFile, *services, *rpcSuffix, *implSuffix, *pkgSuffix, *splitFlag)
+		cfg, err := buildConfig(*layoutFlag, *targetFlag, *singleFile, *services, *rpcSuffix, *implSuffix, *pkgSuffix, *connectSuffix, *splitFlag)
 		if err != nil {
 			return err
 		}
@@ -66,17 +75,29 @@ func main() {
 	})
 }
 
-func buildConfig(single, services, rpcSuffix, impl, pkgSuffix string, split bool) (*config, error) {
+func buildConfig(layout, target, single, services, rpcSuffix, impl, pkgSuffix, connectSuffix string, split bool) (*config, error) {
 	cfg := &config{
-		layout:         layoutSingle,
+		layout:         layoutMode(layout),
+		target:         targetKind(target),
 		singleSuffix:   single,
 		servicesSuffix: services,
 		rpcSuffix:      rpcSuffix,
 		implSuffix:     impl,
 		packageSuffix:  pkgSuffix,
+		connectSuffix:  connectSuffix,
 	}
 	if split {
 		cfg.layout = layoutMulti
+	}
+	switch cfg.layout {
+	case layoutSingle, layoutMulti:
+	default:
+		return nil, fmt.Errorf("unknown layout %q", cfg.layout)
+	}
+	switch cfg.target {
+	case targetGRPC, targetConnect:
+	default:
+		return nil, fmt.Errorf("unknown target %q", cfg.target)
 	}
 	return cfg, nil
 }
@@ -90,24 +111,19 @@ func generateSingleFile(plugin *protogen.Plugin, file *protogen.File, cfg *confi
 	writePackage(g, target.pkgName)
 	g.P()
 
-	needsContext := false
-	for _, service := range file.Services {
-		for _, m := range service.Methods {
-			if isUnary(m) {
-				needsContext = true
-				break
-			}
-		}
-	}
-	writeImports(g, file, needsContext, true, target.samePackage)
+	needsContext := cfg.target == targetConnect || hasUnary(file)
+	needStatus := cfg.target == targetGRPC
+	needConnect := cfg.target == targetConnect
+	needConnectPkg := needConnect && !target.connectSamePackage
+	writeImports(g, file, cfg.target, true, needsContext, needStatus, needConnect, needConnect, needConnectPkg, target.samePackage, target)
 	g.P()
 
 	for _, service := range file.Services {
 		implName := service.GoName + cfg.implSuffix
-		renderServiceStruct(g, service, implName)
+		renderServiceStruct(g, service, implName, cfg.target, target)
 		g.P()
 		for _, method := range service.Methods {
-			renderMethod(g, service, method, implName)
+			renderMethod(g, service, method, implName, cfg.target, target)
 			g.P()
 		}
 	}
@@ -122,12 +138,16 @@ func generateMultiFiles(plugin *protogen.Plugin, file *protogen.File, cfg *confi
 	sg.P()
 	writePackage(sg, target.pkgName)
 	sg.P()
-	writeImports(sg, file, false, false, target.samePackage)
+	// Service file imports: gRPC needs proto + status; Connect only needs connect pkg alias for handler assertion.
+	needProto := cfg.target == targetGRPC
+	needStatus := false
+	needConnectPkg := cfg.target == targetConnect && !target.connectSamePackage
+	writeImports(sg, file, cfg.target, needProto, false, needStatus, false, false, needConnectPkg, target.samePackage, target)
 	sg.P()
 
 	for _, service := range file.Services {
 		implName := service.GoName + cfg.implSuffix
-		renderServiceStruct(sg, service, implName)
+		renderServiceStruct(sg, service, implName, cfg.target, target)
 		sg.P()
 
 		for _, method := range service.Methods {
@@ -137,9 +157,13 @@ func generateMultiFiles(plugin *protogen.Plugin, file *protogen.File, cfg *confi
 			g.P()
 			writePackage(g, target.pkgName)
 			g.P()
-			writeImports(g, file, isUnary(method), true, target.samePackage)
+			needsCtx := cfg.target == targetConnect || isUnary(method)
+			needStatus := cfg.target == targetGRPC
+			needConnect := cfg.target == targetConnect
+			// RPC files do not need connect package alias.
+			writeImports(g, file, cfg.target, true, needsCtx, needStatus, needConnect, needConnect, false, target.samePackage, target)
 			g.P()
-			renderMethod(g, service, method, implName)
+			renderMethod(g, service, method, implName, cfg.target, target)
 			g.P()
 		}
 	}
@@ -154,14 +178,14 @@ func writePackage(g *protogen.GeneratedFile, pkg protogen.GoPackageName) {
 	g.P("package ", pkg)
 }
 
-func writeImports(g *protogen.GeneratedFile, file *protogen.File, needContext bool, needStatus bool, samePackage bool) {
-	if samePackage && !needContext && !needStatus {
+func writeImports(g *protogen.GeneratedFile, file *protogen.File, target targetKind, needProto bool, needContext bool, needStatus bool, needConnectRuntime bool, needErrors bool, needConnectPkg bool, samePackage bool, pkg targetPackage) {
+	if !needProto && !needContext && !needStatus && !needConnectRuntime && !needErrors && !needConnectPkg {
 		return
 	}
 
 	g.P("import (")
-	if !samePackage {
-		g.P(fmt.Sprintf(". %q", string(file.GoImportPath)))
+	if needProto && !samePackage {
+		g.P(fmt.Sprintf("%s %q", pkg.protoAlias, string(file.GoImportPath)))
 	}
 	if needContext {
 		g.P(`context "context"`)
@@ -170,30 +194,128 @@ func writeImports(g *protogen.GeneratedFile, file *protogen.File, needContext bo
 		g.P(`codes "google.golang.org/grpc/codes"`)
 		g.P(`status "google.golang.org/grpc/status"`)
 	}
+	if needConnectRuntime {
+		g.P(`connect "connectrpc.com/connect"`)
+	}
+	if needConnectPkg {
+		g.P(fmt.Sprintf("%s %q", pkg.connectAlias, string(pkg.connectImportPath)))
+	}
+	if needErrors {
+		g.P(`"errors"`)
+	}
 	g.P(")")
 }
 
-func renderServiceStruct(g *protogen.GeneratedFile, service *protogen.Service, implName string) {
+func renderServiceStruct(g *protogen.GeneratedFile, service *protogen.Service, implName string, target targetKind, pkg targetPackage) {
 	g.P("// ", implName, " provides an empty implementation for ", service.GoName, ".")
 	g.P("type ", implName, " struct {")
-	g.P("\tUnimplemented", service.GoName, "Server")
+	if target == targetGRPC {
+		g.P("\t", qualifyProto("Unimplemented"+service.GoName+"Server", pkg))
+	}
 	g.P("}")
 	g.P()
-	g.P("var _ ", service.GoName, "Server = (*", implName, ")(nil)")
+	if target == targetGRPC {
+		g.P("var _ ", qualifyProto(service.GoName+"Server", pkg), " = (*", implName, ")(nil)")
+	} else {
+		handlerName := service.GoName + "Handler"
+		if !pkg.connectSamePackage {
+			handlerName = pkg.connectAlias + "." + handlerName
+		}
+		g.P("var _ ", handlerName, " = (*", implName, ")(nil)")
+	}
 }
 
-func renderMethod(g *protogen.GeneratedFile, service *protogen.Service, method *protogen.Method, implName string) {
+func renderMethod(g *protogen.GeneratedFile, service *protogen.Service, method *protogen.Method, implName string, target targetKind, pkg targetPackage) {
+	if target == targetGRPC {
+		renderMethodGRPC(g, service, method, implName, pkg)
+		return
+	}
+	renderMethodConnect(g, service, method, implName, pkg)
+}
+
+func rpcFileName(prefix, service, method, suffix string) string {
+	return prefix + "_" + snakeCase(service) + "_" + snakeCase(method) + suffix
+}
+
+type targetPackage struct {
+	prefix             string
+	importPath         protogen.GoImportPath
+	pkgName            protogen.GoPackageName
+	samePackage        bool
+	protoAlias         string
+	connectImportPath  protogen.GoImportPath
+	connectPkgName     protogen.GoPackageName
+	connectSamePackage bool
+	connectAlias       string
+}
+
+func targetInfo(file *protogen.File, cfg *config) targetPackage {
+	prefix := file.GeneratedFilenamePrefix
+	importPath := file.GoImportPath
+	pkgName := file.GoPackageName
+	protoAlias := string(file.GoPackageName)
+	if protoAlias == "" {
+		protoAlias = "pb"
+	}
+
+	if cfg.packageSuffix != "" {
+		dir, base := path.Split(prefix)
+		prefix = path.Join(dir, cfg.packageSuffix, base)
+		importPath = protogen.GoImportPath(path.Join(string(importPath), cfg.packageSuffix))
+		pkgName = protogen.GoPackageName(path.Base(string(importPath)))
+	}
+
+	basePkg := path.Base(string(file.GoImportPath))
+	connectImport := file.GoImportPath
+	if cfg.connectSuffix != "" {
+		connectImport = protogen.GoImportPath(path.Join(string(file.GoImportPath), basePkg+cfg.connectSuffix))
+	}
+	connectPkg := protogen.GoPackageName(path.Base(string(connectImport)))
+	connectAlias := string(connectPkg)
+	if connectAlias == "" || connectAlias == "connect" {
+		connectAlias = "connectpb"
+	}
+
+	return targetPackage{
+		prefix:             prefix,
+		importPath:         importPath,
+		pkgName:            pkgName,
+		samePackage:        importPath == file.GoImportPath,
+		protoAlias:         protoAlias,
+		connectImportPath:  connectImport,
+		connectPkgName:     connectPkg,
+		connectSamePackage: importPath == connectImport,
+		connectAlias:       connectAlias,
+	}
+}
+
+func isUnary(method *protogen.Method) bool {
+	return !method.Desc.IsStreamingClient() && !method.Desc.IsStreamingServer()
+}
+
+func hasUnary(file *protogen.File) bool {
+	for _, service := range file.Services {
+		for _, m := range service.Methods {
+			if isUnary(m) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func renderMethodGRPC(g *protogen.GeneratedFile, service *protogen.Service, method *protogen.Method, implName string, pkg targetPackage) {
 	methodName := method.GoName
 	notImplemented := fmt.Sprintf("method %s not implemented", methodName)
-	streamType := fmt.Sprintf("%s_%sServer", service.GoName, methodName)
+	streamType := qualifyProto(fmt.Sprintf("%s_%sServer", service.GoName, methodName), pkg)
 
 	switch {
 	case isUnary(method):
-		g.P("func (s *", implName, ") ", methodName, "(ctx context.Context, req *", method.Input.GoIdent.GoName, ") (*", method.Output.GoIdent.GoName, ", error) {")
+		g.P("func (s *", implName, ") ", methodName, "(ctx context.Context, req *", qualifyProto(method.Input.GoIdent.GoName, pkg), ") (*", qualifyProto(method.Output.GoIdent.GoName, pkg), ", error) {")
 		g.P("\treturn nil, status.Errorf(codes.Unimplemented, \"", notImplemented, "\")")
 		g.P("}")
 	case !method.Desc.IsStreamingClient() && method.Desc.IsStreamingServer():
-		g.P("func (s *", implName, ") ", methodName, "(req *", method.Input.GoIdent.GoName, ", stream ", streamType, ") error {")
+		g.P("func (s *", implName, ") ", methodName, "(req *", qualifyProto(method.Input.GoIdent.GoName, pkg), ", stream ", streamType, ") error {")
 		g.P("\treturn status.Errorf(codes.Unimplemented, \"", notImplemented, "\")")
 		g.P("}")
 	default:
@@ -203,39 +325,37 @@ func renderMethod(g *protogen.GeneratedFile, service *protogen.Service, method *
 	}
 }
 
-func rpcFileName(prefix, service, method, suffix string) string {
-	return prefix + "_" + snakeCase(service) + "_" + snakeCase(method) + suffix
-}
+func renderMethodConnect(g *protogen.GeneratedFile, service *protogen.Service, method *protogen.Method, implName string, pkg targetPackage) {
+	methodName := method.GoName
+	notImplemented := fmt.Sprintf("method %s not implemented", methodName)
+	reqType := qualifyProto(method.Input.GoIdent.GoName, pkg)
+	respType := qualifyProto(method.Output.GoIdent.GoName, pkg)
 
-type targetPackage struct {
-	prefix      string
-	importPath  protogen.GoImportPath
-	pkgName     protogen.GoPackageName
-	samePackage bool
-}
-
-func targetInfo(file *protogen.File, cfg *config) targetPackage {
-	prefix := file.GeneratedFilenamePrefix
-	importPath := file.GoImportPath
-	pkgName := file.GoPackageName
-
-	if cfg.packageSuffix != "" {
-		dir, base := path.Split(prefix)
-		prefix = path.Join(dir, cfg.packageSuffix, base)
-		importPath = protogen.GoImportPath(path.Join(string(importPath), cfg.packageSuffix))
-		pkgName = protogen.GoPackageName(path.Base(string(importPath)))
-	}
-
-	return targetPackage{
-		prefix:      prefix,
-		importPath:  importPath,
-		pkgName:     pkgName,
-		samePackage: importPath == file.GoImportPath,
+	switch {
+	case isUnary(method):
+		g.P("func (s *", implName, ") ", methodName, "(ctx context.Context, req *connect.Request[", reqType, "]) (*connect.Response[", respType, "], error) {")
+		g.P("\treturn nil, connect.NewError(connect.CodeUnimplemented, errors.New(\"", notImplemented, "\"))")
+		g.P("}")
+	case !method.Desc.IsStreamingClient() && method.Desc.IsStreamingServer():
+		g.P("func (s *", implName, ") ", methodName, "(ctx context.Context, req *connect.Request[", reqType, "], stream *connect.ServerStream[", respType, "]) error {")
+		g.P("\treturn connect.NewError(connect.CodeUnimplemented, errors.New(\"", notImplemented, "\"))")
+		g.P("}")
+	case method.Desc.IsStreamingClient() && !method.Desc.IsStreamingServer():
+		g.P("func (s *", implName, ") ", methodName, "(ctx context.Context, stream *connect.ClientStream[", reqType, "]) (*connect.Response[", respType, "], error) {")
+		g.P("\treturn nil, connect.NewError(connect.CodeUnimplemented, errors.New(\"", notImplemented, "\"))")
+		g.P("}")
+	default:
+		g.P("func (s *", implName, ") ", methodName, "(ctx context.Context, stream *connect.BidiStream[", reqType, ", ", respType, "]) error {")
+		g.P("\treturn connect.NewError(connect.CodeUnimplemented, errors.New(\"", notImplemented, "\"))")
+		g.P("}")
 	}
 }
 
-func isUnary(method *protogen.Method) bool {
-	return !method.Desc.IsStreamingClient() && !method.Desc.IsStreamingServer()
+func qualifyProto(name string, pkg targetPackage) string {
+	if pkg.samePackage {
+		return name
+	}
+	return pkg.protoAlias + "." + name
 }
 
 func snakeCase(s string) string {
