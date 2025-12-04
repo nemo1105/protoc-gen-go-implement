@@ -2,7 +2,7 @@
 
 [中文文档](README_zh.md)
 
-`protoc-gen-go-implement` is a Go `protoc` plugin that generates empty gRPC/Connect service implementations returning “not implemented” errors. It supports single-file and multi-file layouts. Use `package_suffix` to emit implementations in a separate package (dot-importing the proto package), `target` to pick gRPC or Connect, and it works with `paths=source_relative`.
+`protoc-gen-go-implement` is a Go `protoc` plugin that generates empty gRPC/Connect service implementations returning “not implemented” errors. It supports single-file or multi-file output so you can quickly scaffold services or split per-method placeholders. Use `package_suffix` to emit implementations in a separate package, choose gRPC or Connect via `target`, and it works with `paths=source_relative`.
 
 ## Install
 
@@ -19,7 +19,7 @@
 ## Usage
 
 Plugin name: `protoc-gen-go-implement`. Use alongside `protoc-gen-go` and `protoc-gen-go-grpc` or `protoc-gen-connect-go`.  
-`target` picks gRPC (default) or Connect. `package_suffix` controls the implementation package (empty = same as proto; non-empty adds a suffix and dot-imports the proto package). Output paths are fully controlled by the `out` argument; works with `paths=source_relative`.
+`target` picks gRPC (default) or Connect. `package_suffix` controls the implementation package (empty = same as proto). Output paths are fully controlled by the `out` argument; works with `paths=source_relative`.
 
 ### With protoc
 
@@ -32,7 +32,7 @@ protoc \
   path/to/your.proto
 ```
 Generates `<prefix>_implement.pb.go` with empty stubs.  
-Output location is determined by `out` and `paths`; the example above uses `package_suffix=implement` so files land under `./gen/implement`.
+Output location is determined by `out` and `paths`; the example above combines `package_suffix=implement` to produce package `implement` under `./gen/implement`.
 
 #### Multi file
 ```bash
@@ -61,29 +61,25 @@ protoc \
 - `services_suffix`: service definition file suffix in multi layout, default `_implement_services.pb.go`.
 - `rpc_suffix`: RPC file suffix in multi layout, default `_rpc.pb.go`.
 - `impl_suffix`: suffix appended to generated service struct names, default `Impl`.
-- `package_suffix`: suffix appended to the proto `go_package` for the implementation package (empty = same package; non-empty will dot-import the proto package).
+- `package_suffix`: suffix appended to the proto `go_package` for the implementation package (empty = same package).
 - `connect_package_suffix`: suffix for the Connect-generated package (default `connect`, matches `protoc-gen-connect-go` default).
 - `paths`: `import` (default) or `source_relative`.
 
 ### With Buf (recommended)
 The `example/` directory contains a complete Buf setup:
 - `buf.yaml`: lint/breaking config and proto roots.
-- `buf.gen.yaml`: generation template (go, go-grpc, and two go-implement entries): gRPC multi-file stubs to `gen/implement_grpc` and Connect multi-file stubs to `gen/implement_connect`, both using `paths=source_relative`, `layout=multi`, `package_suffix=implement`.
-- `proto/*`: sample protos.
+- `buf.gen.yaml`: generation template.
+- `proto/*`: sample proto files.
 
 Steps:
 1) Install Buf: https://buf.build/docs/installation (e.g., `brew install buf`).
-2) Install generators:
+2) Install generator:
    ```bash
    go install github.com/nemo1105/protoc-gen-go-implement@latest
-   # If you need Connect support:
-   go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
    ```
 3) Generate:
    ```bash
    cd example
    buf generate
    ```
-   Outputs to `example/gen` (pb/grpc), `example/gen/implement_grpc` (gRPC stubs), and `example/gen/implement_connect` (Connect stubs).
-
-Adjust layout/target/package: edit `example/buf.gen.yaml` options for the go-implement plugin (e.g., switch to single file, change `target`, or change `package_suffix`).
+   See the directory layout after generation in the comment at the bottom of `example/buf.gen.yaml`.
