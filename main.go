@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -40,6 +41,7 @@ type config struct {
 	packageSuffix  string
 	connectSuffix  string
 	modulePath     string
+	overwrite      bool
 }
 
 var (
@@ -53,6 +55,7 @@ var (
 	pkgSuffix     = flagSet.String("package_suffix", "", "suffix appended to go_package for generated impl package (empty = same package)")
 	connectSuffix = flagSet.String("connect_package_suffix", "connect", "suffix for connect generated package (used when target=connect)")
 	splitFlag     = flagSet.Bool("split", false, "generate svc and rpc to separate files")
+	overwriteFlag = flagSet.Bool("overwrite", false, "overwrite the exists file")
 	diffPackage   = flagSet.Bool("diff_package", false, "generate files are diff with base protocol files")
 )
 
@@ -82,7 +85,7 @@ func main() {
 	})
 }
 func debugRun(plugin *protogen.Plugin) error {
-	cfg, err := buildConfig(*layoutFlag, *targetFlag, *singleFile, *services, *rpcSuffix, *implSuffix, *pkgSuffix, *connectSuffix, *splitFlag)
+	cfg, err := buildConfig(*layoutFlag, *targetFlag, *singleFile, *services, *rpcSuffix, *implSuffix, *pkgSuffix, *connectSuffix, *splitFlag, *overwriteFlag)
 	if err != nil {
 		return err
 	}
@@ -94,16 +97,20 @@ func debugRun(plugin *protogen.Plugin) error {
 
 		switch cfg.layout {
 		case layoutSingle:
-			generateSingleFile(plugin, file, cfg)
+			if err := generateSingleFile(plugin, file, cfg); err != nil {
+				return err
+			}
 		case layoutMulti:
-			generateMultiFiles(plugin, file, cfg)
+			if err := generateMultiFiles(plugin, file, cfg); err != nil {
+				return err
+			}
 		}
 	}
 
 	return nil
 }
 
-func buildConfig(layout, target, single, services, rpcSuffix, impl, pkgSuffix, connectSuffix string, split bool) (*config, error) {
+func buildConfig(layout, target, single, services, rpcSuffix, impl, pkgSuffix, connectSuffix string, split bool, overwrite bool) (*config, error) {
 	cfg := &config{
 		layout:         layoutMode(layout),
 		target:         targetKind(target),
@@ -113,6 +120,7 @@ func buildConfig(layout, target, single, services, rpcSuffix, impl, pkgSuffix, c
 		implSuffix:     impl,
 		packageSuffix:  pkgSuffix,
 		connectSuffix:  connectSuffix,
+		overwrite:      overwrite,
 	}
 	if split {
 		cfg.layout = layoutMulti
@@ -130,10 +138,16 @@ func buildConfig(layout, target, single, services, rpcSuffix, impl, pkgSuffix, c
 	return cfg, nil
 }
 
-func generateSingleFile(plugin *protogen.Plugin, file *protogen.File, cfg *config) {
+func generateSingleFile(plugin *protogen.Plugin, file *protogen.File, cfg *config) error {
 	target := targetInfo(file, cfg)
 	filename := target.prefix + cfg.singleSuffix
-	g := plugin.NewGeneratedFile(filename, target.importPath)
+	g, err := prepareGeneratedFile(plugin, filename, target.importPath, cfg.overwrite)
+	if err != nil {
+		return err
+	}
+	if g == nil {
+		return nil
+	}
 	writeHeader(g, file)
 	g.P()
 	writePackage(g, target.pkgName)
@@ -155,30 +169,45 @@ func generateSingleFile(plugin *protogen.Plugin, file *protogen.File, cfg *confi
 			g.P()
 		}
 	}
+
+	return nil
 }
 
-func generateMultiFiles(plugin *protogen.Plugin, file *protogen.File, cfg *config) {
+func generateMultiFiles(plugin *protogen.Plugin, file *protogen.File, cfg *config) error {
 	target := targetInfo(file, cfg)
 
 	servicesFile := target.prefix + cfg.servicesSuffix
-	sg := plugin.NewGeneratedFile(servicesFile, target.importPath)
-	writePackage(sg, target.pkgName)
-	sg.P()
-	// Service file imports: gRPC needs proto + status; Connect only needs connect pkg alias for handler assertion.
-	needProto := cfg.target == targetGRPC
-	needStatus := false
-	needConnectPkg := cfg.target == targetConnect && !target.connectSamePackage
-	writeImports(sg, file, cfg.target, needProto, false, needStatus, false, false, needConnectPkg, target.samePackage, target)
-	sg.P()
+	sg, err := prepareGeneratedFile(plugin, servicesFile, target.importPath, cfg.overwrite)
+	if err != nil {
+		return err
+	}
+	if sg != nil {
+		writePackage(sg, target.pkgName)
+		sg.P()
+		// Service file imports: gRPC needs proto + status; Connect only needs connect pkg alias for handler assertion.
+		needProto := cfg.target == targetGRPC
+		needStatus := false
+		needConnectPkg := cfg.target == targetConnect && !target.connectSamePackage
+		writeImports(sg, file, cfg.target, needProto, false, needStatus, false, false, needConnectPkg, target.samePackage, target)
+		sg.P()
+	}
 
 	for _, service := range file.Services {
 		implName := service.GoName + cfg.implSuffix
-		renderServiceStruct(sg, service, implName, cfg.target, target)
-		sg.P()
+		if sg != nil {
+			renderServiceStruct(sg, service, implName, cfg.target, target)
+			sg.P()
+		}
 
 		for _, method := range service.Methods {
 			rpcFile := rpcFileName(target.prefix, service.GoName, method.GoName, cfg.rpcSuffix)
-			g := plugin.NewGeneratedFile(rpcFile, target.importPath)
+			g, err := prepareGeneratedFile(plugin, rpcFile, target.importPath, cfg.overwrite)
+			if err != nil {
+				return err
+			}
+			if g == nil {
+				continue
+			}
 			writeHeader(g, file)
 			g.P()
 			writePackage(g, target.pkgName)
@@ -193,6 +222,8 @@ func generateMultiFiles(plugin *protogen.Plugin, file *protogen.File, cfg *confi
 			g.P()
 		}
 	}
+
+	return nil
 }
 
 func writeHeader(g *protogen.GeneratedFile, file *protogen.File) {
@@ -312,6 +343,32 @@ func targetInfo(file *protogen.File, cfg *config) targetPackage {
 		connectPkgName:     connectPkg,
 		connectSamePackage: importPath == connectImport && !*diffPackage,
 		connectAlias:       connectAlias,
+	}
+}
+
+func prepareGeneratedFile(plugin *protogen.Plugin, filename string, importPath protogen.GoImportPath, overwrite bool) (*protogen.GeneratedFile, error) {
+	skip, err := shouldSkipFile(filename, overwrite)
+	if err != nil {
+		return nil, err
+	}
+	if skip {
+		return nil, nil
+	}
+	return plugin.NewGeneratedFile(filename, importPath), nil
+}
+
+func shouldSkipFile(filename string, overwrite bool) (bool, error) {
+	if overwrite {
+		return false, nil
+	}
+	_, err := os.Stat(filename)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, os.ErrNotExist):
+		return false, nil
+	default:
+		return false, err
 	}
 }
 
