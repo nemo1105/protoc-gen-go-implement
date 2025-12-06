@@ -38,6 +38,7 @@ plugins:
   - local: protoc-gen-go-implement
     out: gen
     opt:
+      - out=gen
       - paths=source_relative
       - package_suffix=multi_connect
       - services_suffix=.svc.go
@@ -45,6 +46,7 @@ plugins:
       - impl_suffix=ServiceImplement
       - split=true
       - target=connect
+      - register=true
   # single file
   - local: protoc-gen-go-implement
     out: gen
