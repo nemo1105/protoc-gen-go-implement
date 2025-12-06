@@ -497,11 +497,19 @@ func writeRegisterBase(plugin *protogen.Plugin, target registerPackage, overwrit
 		g.P("\t\tregister(mux)")
 		g.P("\t}")
 		g.P("}")
+		g.P()
+		g.P("func ServiceNames() []string {")
+		g.P("\treturn services")
+		g.P("}")
 	case targetGRPC:
 		g.P("func RegisterAll(server grpc.ServiceRegistrar) {")
 		g.P("\tfor _, register := range registers {")
 		g.P("\t\tregister(server)")
 		g.P("\t}")
+		g.P("}")
+		g.P()
+		g.P("func ServiceNames() []string {")
+		g.P("\treturn services")
 		g.P("}")
 	}
 
