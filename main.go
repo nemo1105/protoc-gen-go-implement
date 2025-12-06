@@ -111,6 +111,9 @@ func debugRun(plugin *protogen.Plugin) error {
 	if err != nil {
 		return err
 	}
+	if cfg.modulePath == "" {
+		cfg.modulePath = detectModulePath()
+	}
 
 	registerBaseWritten := make(map[string]bool)
 
@@ -383,10 +386,6 @@ func targetInfo(file *protogen.File, cfg *config) targetPackage {
 }
 
 func newRegisterPackage(target targetPackage, file *protogen.File, cfg *config) registerPackage {
-	modulePath := cfg.modulePath
-	if modulePath == "" {
-		modulePath = detectModulePath()
-	}
 	outDir := strings.Trim(cfg.outDir, "/")
 	relDir := path.Dir(target.prefix)
 	if relDir == "." {
@@ -397,10 +396,10 @@ func newRegisterPackage(target targetPackage, file *protogen.File, cfg *config) 
 	pkgName := string(target.pkgName)
 	if outDir != "" {
 		rootImport = outDir
-		if modulePath != "" {
-			rootImport = path.Join(modulePath, outDir)
-		}
 		pkgName = path.Base(outDir)
+		if cfg.modulePath != "" {
+			rootImport = path.Join(cfg.modulePath, outDir)
+		}
 	}
 
 	implImport := string(target.importPath)
@@ -409,9 +408,6 @@ func newRegisterPackage(target targetPackage, file *protogen.File, cfg *config) 
 	}
 
 	connectImport := string(target.connectImportPath)
-	if outDir != "" {
-		connectImport = path.Join(rootImport, relDir, string(target.connectPkgName))
-	}
 
 	protoImport := string(file.GoImportPath)
 
