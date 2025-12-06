@@ -64,6 +64,7 @@ protoc \
 - `package_suffix`: suffix appended to the proto `go_package` for the implementation package (empty = same package).
 - `connect_package_suffix`: suffix for the Connect-generated package (default `connect`, matches `protoc-gen-connect-go` default).
 - `overwrite`: overwrite existing generated files (default `false` skips files that already exist).
+- `register`: generate service register files under the output directory root, ignoring `paths` (default `false`).
 - `paths`: `import` (default) or `source_relative`.
 
 ### With Buf (recommended)

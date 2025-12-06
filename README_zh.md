@@ -63,6 +63,7 @@ protoc \
 - `package_suffix`：实现包的后缀，追加到 proto 的 `go_package`（为空则与 proto 包相同）。
 - `connect_package_suffix`：Connect 生成包的后缀（默认 `connect`，与 `protoc-gen-connect-go` 默认保持一致）。
 - `overwrite`：是否覆写已存在的生成文件，默认 `false`（跳过已存在的文件）。
+- `register`：是否生成服务注册文件，输出在 `out` 目录根（不受 `paths` 影响），默认 `false`。
 - `paths`：`import`（默认）或 `source_relative`。
 
 ### 使用 Buf（推荐）
