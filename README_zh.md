@@ -17,7 +17,7 @@
 ## 使用
 
 插件名称：`protoc-gen-go-implement`。与 `protoc-gen-go` 及 `protoc-gen-go-grpc` 或 `protoc-gen-connect-go` 搭配使用。  
-`target` 选择 gRPC（默认）或 Connect。`package_suffix` 控制实现包（为空则与 proto 包相同）。输出目录由 protoc 的 `--go-implement_out ... :<out_dir>` 决定；如果开启 `register`，需要再通过插件选项 `out=...` 额外传一次相同的目录，以便生成的 register 文件能正确计算包名/导入。
+`target` 选择 gRPC（默认）或 Connect。`package_suffix` 控制实现包（为空则与 proto 包相同）。输出目录由 protoc 的 `--go-implement_out ... :<out_dir>` 决定；如果开启 `register` 或需要覆盖检测，建议通过插件选项 `out=...` 再传一次相同的目录，以便正确计算 register 文件的包名/导入及已有文件路径。
 
 ### 使用 protoc
 
@@ -55,7 +55,7 @@ protoc \
 ```
 
 ### 可选参数（`--go-implement_out=<options>:<out_dir>`）
-- `out`：实现代码的输出根目录（与冒号后的 `<out_dir>` 相同）。仅在 `register=true` 时必填，用于推导 register 文件的包名和实现导入路径；它是插件选项，不是冒号后的 `<out_dir>` 本身。
+- `out`：实现代码的输出根目录（与冒号后的 `<out_dir>` 相同）。`register=true` 时必填，用于推导 register 文件包名和实现导入；同时用于在 `overwrite=false` 时定位已有文件以便跳过。它是插件选项，不是冒号后的 `<out_dir>` 本身。
 - `target=grpc|connect`：选择生成 gRPC（默认）或 Connect 处理器。
 - `single_suffix`：单文件模式的文件后缀，默认 `_implement.pb.go`。
 - `services_suffix`：多文件模式中服务定义文件后缀，默认 `_implement_services.pb.go`。

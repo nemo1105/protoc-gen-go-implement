@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -178,7 +179,7 @@ func buildConfig(layout, target, single, services, rpcSuffix, impl, pkgSuffix, c
 func generateSingleFile(plugin *protogen.Plugin, file *protogen.File, cfg *config) error {
 	target := targetInfo(file, cfg)
 	filename := target.prefix + cfg.singleSuffix
-	g, err := prepareGeneratedFile(plugin, filename, target.importPath, cfg.overwrite)
+	g, err := prepareGeneratedFile(plugin, filename, target.importPath, cfg.overwrite, cfg.outDir)
 	if err != nil {
 		return err
 	}
@@ -212,7 +213,7 @@ func generateMultiFiles(plugin *protogen.Plugin, file *protogen.File, cfg *confi
 	target := targetInfo(file, cfg)
 
 	servicesFile := target.prefix + cfg.servicesSuffix
-	sg, err := prepareGeneratedFile(plugin, servicesFile, target.importPath, cfg.overwrite)
+	sg, err := prepareGeneratedFile(plugin, servicesFile, target.importPath, cfg.overwrite, cfg.outDir)
 	if err != nil {
 		return err
 	}
@@ -236,7 +237,7 @@ func generateMultiFiles(plugin *protogen.Plugin, file *protogen.File, cfg *confi
 
 		for _, method := range service.Methods {
 			rpcFile := rpcFileName(target.prefix, service.GoName, method.GoName, cfg.rpcSuffix)
-			g, err := prepareGeneratedFile(plugin, rpcFile, target.importPath, cfg.overwrite)
+			g, err := prepareGeneratedFile(plugin, rpcFile, target.importPath, cfg.overwrite, cfg.outDir)
 			if err != nil {
 				return err
 			}
@@ -445,7 +446,7 @@ func generateRegisterFiles(plugin *protogen.Plugin, file *protogen.File, cfg *co
 	registerPkg := newRegisterPackage(target, file, cfg)
 	key := fmt.Sprintf("%s:%s", registerPkg.importPath, registerPkg.pkgName)
 	if !baseWritten[key] {
-		if err := writeRegisterBase(plugin, registerPkg, cfg.overwrite, cfg.target); err != nil {
+		if err := writeRegisterBase(plugin, registerPkg, cfg.overwrite, cfg.target, cfg.outDir); err != nil {
 			return err
 		}
 		baseWritten[key] = true
@@ -460,9 +461,9 @@ func generateRegisterFiles(plugin *protogen.Plugin, file *protogen.File, cfg *co
 	return nil
 }
 
-func writeRegisterBase(plugin *protogen.Plugin, target registerPackage, overwrite bool, tk targetKind) error {
+func writeRegisterBase(plugin *protogen.Plugin, target registerPackage, overwrite bool, tk targetKind, outDir string) error {
 	filename := "register.go"
-	g, err := prepareGeneratedFile(plugin, filename, target.importPath, overwrite)
+	g, err := prepareGeneratedFile(plugin, filename, target.importPath, overwrite, outDir)
 	if err != nil {
 		return err
 	}
@@ -518,7 +519,7 @@ func writeRegisterBase(plugin *protogen.Plugin, target registerPackage, overwrit
 
 func writeRegisterService(plugin *protogen.Plugin, file *protogen.File, target targetPackage, registerPkg registerPackage, service *protogen.Service, cfg *config) error {
 	filename := "register_" + snakeCase(service.GoName) + ".go"
-	g, err := prepareGeneratedFile(plugin, filename, registerPkg.importPath, cfg.overwrite)
+	g, err := prepareGeneratedFile(plugin, filename, registerPkg.importPath, cfg.overwrite, cfg.outDir)
 	if err != nil {
 		return err
 	}
@@ -590,8 +591,8 @@ func writeRegisterServiceGRPC(g *protogen.GeneratedFile, file *protogen.File, ta
 	g.P("}")
 }
 
-func prepareGeneratedFile(plugin *protogen.Plugin, filename string, importPath protogen.GoImportPath, overwrite bool) (*protogen.GeneratedFile, error) {
-	skip, err := shouldSkipFile(filename, overwrite)
+func prepareGeneratedFile(plugin *protogen.Plugin, filename string, importPath protogen.GoImportPath, overwrite bool, outDir string) (*protogen.GeneratedFile, error) {
+	skip, err := shouldSkipFile(filename, overwrite, outDir)
 	if err != nil {
 		return nil, err
 	}
@@ -601,11 +602,19 @@ func prepareGeneratedFile(plugin *protogen.Plugin, filename string, importPath p
 	return plugin.NewGeneratedFile(filename, importPath), nil
 }
 
-func shouldSkipFile(filename string, overwrite bool) (bool, error) {
+func shouldSkipFile(filename string, overwrite bool, outDir string) (bool, error) {
 	if overwrite {
 		return false, nil
 	}
-	_, err := os.Stat(filename)
+
+	filePath := filename
+	if outDir != "" && !filepath.IsAbs(filename) {
+		filePath = filepath.Join(outDir, filename)
+	}
+
+	filePath = filepath.Clean(filePath)
+
+	_, err := os.Stat(filePath)
 	switch {
 	case err == nil:
 		return true, nil

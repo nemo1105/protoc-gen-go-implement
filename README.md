@@ -19,7 +19,7 @@
 ## Usage
 
 Plugin name: `protoc-gen-go-implement`. Use alongside `protoc-gen-go` and `protoc-gen-go-grpc` or `protoc-gen-connect-go`.  
-`target` picks gRPC (default) or Connect. `package_suffix` controls the implementation package (empty = same as proto). Output paths are controlled by the protoc `--go-implement_out ... :<out_dir>` argument; you can also pass the same directory again via the plugin option `out=...` (used only for register file package/import derivation).
+`target` picks gRPC (default) or Connect. `package_suffix` controls the implementation package (empty = same as proto). Output paths are controlled by the protoc `--go-implement_out ... :<out_dir>` argument; you can also pass the same directory again via the plugin option `out=...` (used for register file package/import derivation and overwrite checks).
 
 ### With protoc
 
@@ -56,7 +56,7 @@ protoc \
 ```
 
 ### Options (`--go-implement_out=<options>:<out_dir>`)
-- `out`: implementation output root (same path as `<out_dir>` after the colon). Required when `register=true` so register packages/imports can be derived. This is a plugin option, not the trailing `:<out_dir>` itself.
+- `out`: implementation output root (same path as `<out_dir>` after the colon). Required when `register=true` so register packages/imports can be derived and used to resolve existing files when `overwrite=false`. This is a plugin option, not the trailing `:<out_dir>` itself.
 - `target=grpc|connect`: choose gRPC (default) or Connect handlers.
 - `single_suffix`: suffix for single-file layout, default `_implement.pb.go`.
 - `services_suffix`: service definition file suffix in multi layout, default `_implement_services.pb.go`.
